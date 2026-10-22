@@ -1,0 +1,62 @@
+name: build-and-test
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write        # create releases on tags
+  id-token: write        # build provenance attestations
+  attestations: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build packages (Ubuntu 20.04 container)
+        run: build/build.sh out
+
+      - name: Compare stock vs patched (requests + PHP test suite)
+        run: tests/compare.sh out results
+
+      - name: Test install.sh / verify.sh / rollback.sh
+        run: tests/install-test.sh out
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs
+          path: out/
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: results/
+
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'out/*.deb'
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . build/release.env
+          BUNDLE="backports-${BASE_VERSION}+${SUFFIX}-focal-amd64"
+          mkdir -p "$BUNDLE" && cp out/*.deb out/SHA256SUMS install/*.sh "$BUNDLE"/
+          tar -czf "$BUNDLE.tar.gz" "$BUNDLE"
+          sha256sum "$BUNDLE.tar.gz" > "$BUNDLE.tar.gz.sha256"
+          tar -C results -czf test-results.tar.gz .
+          gh release create "$GITHUB_REF_NAME" "$BUNDLE.tar.gz" "$BUNDLE.tar.gz.sha256" \
+            out/*.deb out/SHA256SUMS test-results.tar.gz \
+            --title "$GITHUB_REF_NAME" --notes-file CHANGELOG.md --verify-tag

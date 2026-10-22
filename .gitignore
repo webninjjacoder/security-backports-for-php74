@@ -1,0 +1,4 @@
+out/
+results/
+*.tar.gz
+*.tar.gz.sha256
