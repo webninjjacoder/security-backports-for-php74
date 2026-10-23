@@ -51,15 +51,24 @@ log "installed: $CUR -> installing: $NEW (${#DEBS[@]} packages); mod_php=$MODPHP
 # ---- keep a way back ------------------------------------------------------------------
 BACKUP="/var/backups/php74-rollback-$CUR"
 mkdir -p "$BACKUP"
+# Sources, in order: folders in ROLLBACK_SOURCES (e.g. the folder of the release installed
+# before), then Ubuntu's archive. Ubuntu keeps only its newest build, so a server on an older
+# 7.4.3-4ubuntu2.x rolls back to Ubuntu's 7.4.3-4ubuntu2.29 instead; a previous +cveN release
+# never silently falls back to that (it would make the rollback target vulnerable).
 ( cd "$BACKUP"
-  # Ubuntu's archive keeps only the newest build, so a server still on an older
-  # 7.4.3-4ubuntu2.x rolls back to Ubuntu's 7.4.3-4ubuntu2.29 instead.
   for p in "${PKGS[@]}"; do
     ls "${p}_"*.deb >/dev/null 2>&1 && continue
     v=$(dpkg-query -W -f='${Version}' "$p")
-    apt-get download -q "$p=$v" >/dev/null 2>&1 \
-      || apt-get download -q "$p=7.4.3-4ubuntu2.29" >/dev/null 2>&1 \
-      || die "cannot save a rollback copy of $p"
+    for d in ${ROLLBACK_SOURCES:-}; do
+      f=$(ls "$d/${p}_${v}_"*.deb 2>/dev/null | head -1 || true)
+      [ -n "$f" ] && { cp "$f" .; break; }
+    done
+    ls "${p}_"*.deb >/dev/null 2>&1 && continue
+    apt-get download -q "$p=$v" >/dev/null 2>&1 && continue
+    case "$v" in
+      *+cve*) die "no copy of $p=$v to roll back to; pass ROLLBACK_SOURCES=/path/to/the/previous/release/folder" ;;
+    esac
+    apt-get download -q "$p=7.4.3-4ubuntu2.29" >/dev/null 2>&1 || die "cannot save a rollback copy of $p"
   done )
 log "rollback copies: $BACKUP ($(ls "$BACKUP" | wc -l) packages)"
 
